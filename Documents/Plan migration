@@ -1,0 +1,459 @@
+# **Plano de Migração Estruturado: .NET Framework 4.8 → .NET 8 + Blazor Web App**
+
+Como arquiteto responsável por iniciar essa migração em uma empresa de **Gerenciamento Eletrônico de Ponto**, apresento um plano **passo a passo** baseado em padrões de mercado e experiências reais.
+
+---
+
+## **FASE 0: PREPARAÇÃO E DIAGNÓSTICO (2-3 semanas)**
+
+### **1. Mapeamento Completo do Legado**
+```markdown
+[ ] **Documentar TODAS as funcionalidades** (planilha com:
+    - Módulo (Ex: Cadastro de Funcionários)
+    - Tecnologia (WebForms, MVC, WinForms)
+    - Complexidade (Baixa/Média/Alta)
+    - Dependências (Bibliotecas terceiras, ActiveX, COM)
+    - Integrações (REP, Biometria, Folha de Pagamento)
+    - Regras de Negócio Críticas (Cálculo de horas, Banco de horas)
+    - Volume de Dados (Quantos registros?)
+
+[ ] **Análise de Código Legado**:
+    - Usar ferramentas: NDepend, Roslyn Analyzers
+    - Identificar: 
+        * Classes estáticas (difíceis de migrar)
+        * Chamadas a Win32/API do Windows
+        * Session/ViewState (estado na UI)
+        * WebControls (GridView, DetailsView, etc.)
+```
+
+### **2. Análise de Viabilidade Técnica**
+```markdown
+[ ] **Bibliotecas de Terceiros**:
+    - Telerik/DevExpress/ComponentOne: Verificar versões para Blazor
+    - Relatórios: Crystal Reports? → Migrar para RDLC, FastReport, ou PDFSharp
+    - Geração de XML/ACJEF: Verificar se há bibliotecas .NET Standard
+
+[ ] **Banco de Dados**:
+    - SQL Server 2008/2012? → Verificar compatibilidade com EF Core 8
+    - Stored Procedures complexas: Testar com EF Core ou manter ADO.NET
+
+[ ] **Integrações Externas**:
+    - REPs via serial/USB: Blazor não acessa hardware diretamente
+    - Biometria: Pode precisar de um serviço Windows separado
+```
+
+### **3. Definição da Arquitetura Alvo**
+```yaml
+Decisões-chave:
+1. Blazor Web App (.NET 8) com:
+   - InteractiveServer para módulos administrativos (RH)
+   - InteractiveAuto/Wasm para módulos de coleta (batida de ponto)
+   
+2. API em .NET 8 (Minimal API ou Controller)
+   - Autenticação: JWT + Identity (ou manter Forms Authentication?)
+   - Autorização: Policies baseadas em perfis (RH, Gerente, Funcionário)
+   
+3. Padrão de Projeto:
+   - Clean Architecture ou Onion
+   - Camadas: Core (entidades), Application (casos de uso), Infrastructure, Web
+   
+4. Banco de Dados:
+   - Manter SQL Server existente? Migrar para PostgreSQL?
+   - EF Core 8 com migrations (cuidado com dados existentes)
+```
+
+---
+
+## **FASE 1: AMBIENTE E PROJETOS PILOTO (1-2 semanas)**
+
+### **4. Setup do Ambiente de Desenvolvimento**
+```powershell
+# Criar solução inicial
+dotnet new sln -n PontoEletronico
+dotnet new blazorwasm -o Client --hosted  # ou blazor server? Melhor: blazorwebapp
+dotnet new webapi -o API
+dotnet new classlib -o Core
+dotnet new classlib -o Application
+
+# Adicionar projetos à solução
+dotnet sln add */*.csproj
+
+# Configurar referências
+dotnet add Client/Project reference Application
+dotnet add API/Project reference Application
+dotnet add Application/Project reference Core
+```
+
+### **5. Prova de Conceito (POC) - Primeiro Módulo**
+**Escolha um módulo SIMPLES e de BAIXO RISCO:**
+- Ex: **Cadastro de Departamentos** (CRUD simples, sem regras complexas)
+- **NÃO** comece por: Cálculo de horas, integração com REP, relatórios
+
+**Objetivos da POC:**
+1. Demonstrar que a arquitetura funciona
+2. Identificar gaps técnicos (ex: como migrar relatórios RDLC?)
+3. Treinar a equipe no novo stack
+
+---
+
+## **FASE 2: MIGRAÇÃO INCREMENTAL (3-6 meses)**
+
+### **6. Estratégia de Coexistência (Strangler Fig Pattern)**
+
+```
+┌─────────────────┐
+│   Usuário       │
+└────────┬────────┘
+         │
+    ┌────▼────┐
+    │  YARP   │ ← Reverse Proxy (roteia entre legado e novo)
+    └────┬────┘
+         │
+    ┌────┴─────────────────────────────┐
+    │                                  │
+┌───▼───┐                        ┌────▼────┐
+│Legado │                        │   Novo  │
+│.NET 4.8│                        │.NET 8   │
+└───────┘                        └─────────┘
+```
+
+**Implementação:**
+```csharp
+// YARP (Yet Another Reverse Proxy) config
+{
+  "ReverseProxy": {
+    "Routes": [
+      {
+        "RouteId": "legacy",
+        "ClusterId": "legacyCluster",
+        "Match": { "Path": "{**catch-all}" }
+      }
+    ],
+    "Clusters": {
+      "legacyCluster": {
+        "Destinations": { "legacy": { "Address": "http://legacy-app:80" } }
+      },
+      "newCluster": {
+        "Destinations": { "new": { "Address": "http://new-app:80" } }
+      }
+    }
+  }
+}
+```
+
+**Regras de roteamento:**
+- `/api/*` → Nova API (.NET 8)
+- `/funcionarios` → Blazor (novo)
+- `/ponto/*` → Legado (até migrar)
+- `/relatorios/*` → Legado (até migrar)
+
+### **7. Priorização de Módulos (Matriz Risco/Valor)**
+
+| Módulo | Complexidade | Valor Negócio | Prioridade | Ordem Sugerida |
+|--------|--------------|---------------|------------|----------------|
+| Cadastro de Funcionários | Baixa | Alta | 1 | ✅ Primeiro |
+| Cadastro de Departamentos | Baixa | Média | 2 | ✅ |
+| Consulta de Ponto Individual | Média | Alta | 3 | ✅ |
+| Fechamento de Folha | Alta | Crítica | 4 | ⚠️ Último |
+| Integração REP | Alta | Crítica | 5 | ⚠️ Último |
+
+**Regra de ouro:** Comece pelos módulos **sem integração com hardware** e **sem cálculos complexos**.
+
+---
+
+## **FASE 3: MIGRAÇÃO TÉCNICA DETALHADA**
+
+### **8. Estratégia por Tipo de Componente**
+
+#### **A) WebForms → Blazor**
+```markdown
+[ ] **UserControls (.ascx)** → Componentes Razor (.razor)
+    - Manter lógica de UI, reescrever markup
+    - State management: ViewState → State Container / DB
+
+[ ] **CodeBehind** → Code-behind da página + Services
+    - Movimentar lógica de negócio para Services
+    - Event handlers (Button_Click) → EventCallback
+
+[ ] **GridView** → Tabela Blazor + MudBlazor/Radzen
+    - Sorting/filtering: Implementar manualmente ou usar componentes prontos
+    - Inline editing: EditForm dentro da linha
+
+[ ] **MasterPages** → Layouts (MainLayout.razor)
+    - Manter estrutura visual
+```
+
+#### **B) MVC → Blazor**
+```markdown
+[ ] **Controllers** → Services + Pages
+    - Actions → Methods no Service
+    - Views (.cshtml) → .razor pages
+
+[ ] **Razor Views** → Componentes Razor
+    - Helpers (@Html.TextBoxFor) → InputText/@bind
+    - TempData → CascadingValue / State container
+```
+
+#### **C) Regras de Negócio**
+```csharp
+// Legado (em UserControl):
+protected void btnSalvar_Click(object sender, EventArgs e)
+{
+    if (txtHoras.Text > 8) // Regra hardcoded
+    {
+        lblErro.Text = "Não pode mais de 8h";
+        return;
+    }
+    // Salvar no banco
+}
+
+// NOVO (Service):
+public class PontoService
+{
+    public ValidationResult ValidarJornada(Jornada jornada)
+    {
+        if (jornada.TotalHoras > 8)
+            return ValidationResult.Failure("Não pode mais de 8h diárias");
+        
+        return ValidationResult.Success;
+    }
+}
+
+// No componente:
+private async Task Salvar()
+{
+    var result = _pontoService.ValidarJornada(model);
+    if (!result.IsValid)
+    {
+        error = result.ErrorMessage;
+        return;
+    }
+    await _pontoService.SalvarAsync(model);
+}
+```
+
+---
+
+## **FASE 4: DADOS E INTEGRAÇÃO**
+
+### **9. Estratégia de Banco de Dados**
+```markdown
+[ ] **Manter mesmo banco** (mais seguro)
+    - Usar EF Core 8 com migrations (cuidado com dados existentes)
+    - Para tabelas críticas: NÃO usar migrations, fazer manualmente
+    
+[ ] **Scripts de Migração**:
+    1. Criar novas tabelas (se necessário)
+    2. Manter tabelas antigas funcionando
+    3. Migrar dados gradualmente (se mudar estrutura)
+    
+[ ] **Transição de Dados**:
+    - Dia 1: Sistema legado escreve, novo lê (dual-write)
+    - Dia 30: Novo escreve, legado lê (read-only legado)
+    - Dia 60: Desligar legado
+```
+
+### **10. Integrações Críticas (REP, Biometria)**
+```markdown
+[ ] **REP (Registrador Eletrônico de Ponto)**:
+    - Manter serviço Windows existente (se funciona)
+    - Criar API no .NET 8 para comunicação
+    - Blazor chama API → Serviço Windows → REP
+    
+[ ] **Biometria**:
+    - Se é via navegador: WebUSB/WebBluetooth (limitado)
+    - Melhor: Serviço Windows que expõe API REST local
+    - Blazor consome API local (http://localhost:5001/biometria)
+    
+[ ] **Impressão de Comprovantes**:
+    - Usar JavaScript: window.print()
+    - Ou serviço de impressão via API
+```
+
+---
+
+## **FASE 5: QUALIDADE E TESTES**
+
+### **11. Estratégia de Testes**
+```yaml
+Unitários:
+  - Services (regras de negócio)
+  - Componentes com bUnit
+  - ViewModels/Pages
+
+Integração:
+  - API endpoints (TestServer)
+  - Blazor components com TestServer
+
+E2E:
+  - Playwright ou Selenium
+  - Fluxos completos: "Funcionário bate ponto → RH aprova → Folha"
+
+Performance:
+  - BenchmarkDotNet para services
+  - Lighthouse para Blazor
+```
+
+### **12. Monitoramento em Produção**
+```csharp
+// Application Insights
+services.AddApplicationInsightsTelemetry();
+
+// Logging estruturado
+logger.LogInformation("Funcionário {Id} bateu ponto às {Hora}", 
+    funcionarioId, DateTime.Now);
+
+// Health Checks
+app.MapHealthChecks("/health");
+```
+
+---
+
+## **FASE 6: DEPLOY E ROLLBACK**
+
+### **13. Estratégia de Deploy**
+```markdown
+[ ] **Ambientes**:
+    - Dev → Homologação → Produção
+    
+[ ] **Feature Flags** (LaunchDarkly, Microsoft.FeatureManagement):
+    - Liberar módulo por módulo
+    - Rollback instantâneo (desligar flag)
+    
+[ ] **Deploy Blue-Green**:
+    - Manter legado e novo rodando simultaneamente
+    - YARP aponta 100% para legado
+    - Mudar gradualmente (canary release)
+```
+
+### **14. Plano de Rollback**
+```markdown
+[ ] **Critérios para rollback**:
+    - Erro > 1% das transações
+    - Performance degradada > 30%
+    - Bug crítico (cálculo de ponto errado)
+
+[ ] **Procedimento**:
+    1. Desligar feature flag do módulo problemático
+    2. YARP roteia tudo para legado
+    3. Investigar no ambiente de homologação
+    4. Corrigir e reimplantar
+
+[ ] **Tempo de rollback**: < 5 minutos (automático)
+```
+
+---
+
+## **FASE 7: TREINAMENTO E DOCUMENTAÇÃO**
+
+### **15. Documentação Técnica**
+```markdown
+[ ] **Arquitetura**: Diagramas (C4 model)
+[ ] **API**: Swagger/OpenAPI completo
+[ ] **Blazor**: Storybook para componentes
+[ ] **Deploy**: Runbooks detalhados
+[ ] **Migração**: Matriz de funcionalidades (legado → novo)
+```
+
+### **16. Treinamento da Equipe**
+```markdown
+[ ] **Desenvolvedores**:
+    - Curso intensivo Blazor (2 semanas)
+    - Pair programming com especialista
+    - Code reviews rigorosos
+    
+[ ] **Suporte/Helpdesk**:
+    - Treinamento na nova interface
+    - Guia de troubleshooting
+    
+[ ] **Usuários**:
+    - Workshops por departamento
+    - Vídeos tutoriais curtos
+    - Período de transição com ambos sistemas acessíveis
+```
+
+---
+
+## **CHECKLIST DE SUCESSO (Por Fase)**
+
+### **Fase 0:**
+- [ ] Mapa completo do legado
+- [ ] Análise de compatibilidade concluída
+- [ ] Arquitetura alvo definida e aprovada
+- [ ] Equipe treinada em .NET 8/Blazor
+
+### **Fase 1:**
+- [ ] POC funcionando (cadastro simples)
+- [ ] Performance baseline estabelecida
+- [ ] YARP configurado
+
+### **Fase 2:**
+- [ ] Primeiro módulo migrado em produção
+- [ ] Zero bugs críticos (cálculo errado, perda de dados)
+- [ ] Usuários satisfeitos (pesquisa)
+
+### **Fase 3:**
+- [ ] 50% dos módulos migrados
+- [ ] Integrações críticas testadas
+- [ ] Performance melhorou (ou pelo menos não piorou)
+
+### **Fase 4:**
+- [ ] Todos os módulos migrados
+- [ ] Legado desativado
+- [ ] Documentação completa
+
+---
+
+## **RISCOS CRÍTICOS E MITIGAÇÃO**
+
+| Risco | Probabilidade | Impacto | Mitigação |
+|-------|---------------|---------|-----------|
+| **Cálculo de ponto diferente do legado** | Alta | Crítico | Testes automatizados comparando resultados legado vs novo |
+| **Integração REP quebra** | Média | Crítico | Manter serviço Windows existente, só mudar frontend |
+| **Usuários rejeitam nova interface** | Alta | Alto | Envolvimento desde o início, treinamento, manter legado acessível |
+| **Performance ruim no Blazor Server** | Média | Alto | Monitorar conexões SignalR, considerar Wasm se necessário |
+| **Biblioteca de relatórios incompatível** | Alta | Médio | Identificar na Fase 0, ter alternativa (PDFSharp, iTextSharp) |
+| **Dados corrompidos na migração** | Baixa | Crítico | Backup antes de cada migração, validação pós-migração |
+
+---
+
+## **CRONOGRAMA SUGERIDO (Para 6 meses)**
+
+```
+Mês 1: Fase 0 + Fase 1 (preparação + POC)
+Mês 2: Migrar módulos simples (cadastros)
+Mês 3: Migrar módulos médios (consulta, aprovação)
+Mês 4: Migrar módulos complexos (cálculos, fechamento)
+Mês 5: Testes integrados, performance, treinamento
+Mês 6: Deploy gradual, descomissionamento legado
+```
+
+---
+
+## **O QUE MEDIR (KPIs de Sucesso)**
+
+1. **Técnicos:**
+   - Tempo de resposta < 2s (95º percentil)
+   - Disponibilidade > 99.5%
+   - Zero bugs de cálculo de ponto
+
+2. **Negócio:**
+   - Adoção: > 80% dos usuários usando o novo sistema
+   - Satisfação: Pesquisa NPS > 50
+   - Suporte: Redução de 50% chamados sobre sistema
+
+3. **Equipe:**
+   - Velocidade: Story points/sprint estável ou aumentando
+   - Qualidade: Defect density < 1 por KLOC
+
+---
+
+## **PALAVRAS-CHAVE PARA A ENTREVISTA**
+
+Quando perguntarem "Como você faria a migração?", diga:
+
+> "Primeiro, eu **não migraria tudo de uma vez**. Usaria o **Strangler Fig Pattern** com YARP como reverse proxy. Começaria pelos **módulos de baixo risco e alto valor** (cadastros), mantendo o legado no ar. Criaria uma **biblioteca compartilhada .NET Standard** para as regras de negócio, garantindo que cálculos de ponto sejam idênticos. Para as integrações críticas com REP, **manteria os serviços Windows existentes** e apenas mudaria o frontend. Tudo com **feature flags** para rollback imediato e **testes automatizados comparando resultados** entre legado e novo."
+
+---
+
+**Próximo passo:** Se você quiser, eu posso detalhar **qualquer uma dessas fases** (ex: como exatamente migrar um WebForms com GridView, ou como configurar YARP, ou como escrever os testes de regra de negócio). Qual parte quer aprofundar?
