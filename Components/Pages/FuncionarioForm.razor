@@ -1,0 +1,99 @@
+@page "/funcionarios/novo"
+@page "/funcionarios/{Id:int}"
+@rendermode InteractiveServer
+@using MyApp.Models
+@using MyApp.Services
+@inject IFuncionarioService Service
+@inject NavigationManager Nav
+
+<h3>@(Id is null ? "Novo Funcionário" : $"Editar Funcionário #{Id}")</h3>
+
+@if (!string.IsNullOrWhiteSpace(error))
+{
+    <div class="alert alert-danger">@error</div>
+}
+
+<EditForm Model="@model" OnValidSubmit="Salvar">
+    <DataAnnotationsValidator />
+    <ValidationSummary />
+
+    <div class="mb-3">
+        <label class="form-label">Nome</label>
+        <InputText class="form-control" @bind-Value="model.Nome" />
+        <ValidationMessage For="@(() => model.Nome)" />
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label">CPF</label>
+        <InputText class="form-control" @bind-Value="model.Cpf" />
+    </div>
+
+    <button class="btn btn-primary" type="submit" disabled="@saving">
+        @(saving ? "Salvando..." : "Salvar")
+    </button>
+
+    <button class="btn btn-secondary ms-2" type="button" @onclick="Voltar">
+        Voltar
+    </button>
+</EditForm>
+
+@code {
+    [Parameter] public int? Id { get; set; }
+
+    private FuncionarioDto model = new();
+    private bool saving;
+    private string? error;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        error = null;
+
+        if (Id is null)
+        {
+            model = new FuncionarioDto();
+            return;
+        }
+
+        try
+        {
+            var dto = await Service.GetByIdAsync(Id.Value);
+            if (dto is null)
+            {
+                error = "Funcionário não encontrado.";
+                return;
+            }
+
+            model = dto;
+        }
+        catch (Exception ex)
+        {
+            error = $"Erro ao carregar: {ex.Message}";
+        }
+    }
+
+    private async Task Salvar()
+    {
+        try
+        {
+            saving = true;
+            error = null;
+
+            if (Id is null)
+                await Service.CreateAsync(model);
+            else
+                await Service.UpdateAsync(Id.Value, model);
+
+            Nav.NavigateTo("/funcionarios");
+        }
+        catch (Exception ex)
+        {
+            error = $"Erro ao salvar: {ex.Message}";
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private void Voltar() => Nav.NavigateTo("/funcionarios");
+}
