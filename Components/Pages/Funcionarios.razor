@@ -1,0 +1,97 @@
+@page "/funcionarios"
+@rendermode InteractiveServer
+@using MyApp.Models
+@using MyApp.Services
+@inject IFuncionarioService Service
+@inject NavigationManager Nav
+
+<h3>Funcionários</h3>
+
+<div class="mb-3">
+    <button class="btn btn-primary" @onclick="Novo">Novo</button>
+</div>
+
+@if (loading)
+{
+    <p>Carregando...</p>
+}
+else if (!string.IsNullOrWhiteSpace(error))
+{
+    <div class="alert alert-danger">@error</div>
+}
+else if (items.Count == 0)
+{
+    <p>Nenhum funcionário cadastrado.</p>
+}
+else
+{
+    <table class="table table-striped">
+        <thead>
+        <tr>
+            <th>Id</th>
+            <th>Nome</th>
+            <th>CPF</th>
+            <th style="width: 220px;"></th>
+        </tr>
+        </thead>
+        <tbody>
+        @foreach (var f in items)
+        {
+            <tr>
+                <td>@f.Id</td>
+                <td>@f.Nome</td>
+                <td>@f.Cpf</td>
+                <td>
+                    <button class="btn btn-sm btn-secondary" @onclick="() => Editar(f.Id)">Editar</button>
+                    <button class="btn btn-sm btn-danger ms-2" @onclick="() => Excluir(f.Id)">Excluir</button>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+@code {
+    private bool loading = true;
+    private string? error;
+    private List<FuncionarioDto> items = new();
+
+    protected override async Task OnInitializedAsync()
+        => await Load();
+
+    private async Task Load()
+    {
+        loading = true;
+        error = null;
+
+        try
+        {
+            items = await Service.GetAllAsync();
+        }
+        catch (Exception ex)
+        {
+            error = $"Falha ao carregar: {ex.Message}";
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private void Novo() => Nav.NavigateTo("/funcionarios/novo");
+    private void Editar(int id) => Nav.NavigateTo($"/funcionarios/{id}");
+
+    private async Task Excluir(int id)
+    {
+        // Em entrevista, você pode dizer: "Aqui eu usaria um confirm via JSInterop"
+        try
+        {
+            await Service.DeleteAsync(id);
+            await Load();
+        }
+        catch (Exception ex)
+        {
+            error = $"Falha ao excluir: {ex.Message}";
+        }
+    }
+}
